@@ -186,6 +186,26 @@ const App = () => {
     setShowAddThemeModal(false);
   };
 
+  // Update Theme (if needed, though not explicitly requested, good to have a placeholder)
+  const handleUpdateTheme = (id, newName) => {
+    setThemes(prevThemes =>
+      prevThemes.map(theme =>
+        theme.id === id ? { ...theme, name: newName } : theme
+      )
+    );
+  };
+
+  // Delete Theme
+  const handleDeleteTheme = (id) => {
+    setThemes(prevThemes => prevThemes.filter(theme => theme.id !== id));
+    // Also delete all initiatives associated with this theme
+    const initiativesToDelete = initiatives.filter(init => init.themeId === id);
+    const initiativeIdsToDelete = initiativesToDelete.map(init => init.id);
+    setInitiatives(prevInitiatives => prevInitiatives.filter(init => init.themeId !== id));
+    // And delete all milestones associated with those initiatives
+    setMilestones(prevMilestones => prevMilestones.filter(m => !initiativeIdsToDelete.includes(m.initiativeId)));
+  };
+
   // Add Initiative
   const handleAddInitiative = () => {
     if (!newInitiative.name.trim() || !newInitiative.themeId) return;
@@ -602,8 +622,19 @@ const App = () => {
                   className={`grid border-b border-gray-200 last:border-b-0 ${themeBackgroundColors[themeIndex % themeBackgroundColors.length]}`}
                   style={{ gridTemplateColumns: `200px repeat(${timePeriods.length}, 1fr)` }}
                 >
-                  <div className="p-4 font-medium text-gray-900 border-r border-gray-200 flex items-center">
+                  <div className="p-4 font-medium text-gray-900 border-r border-gray-200 flex items-center relative group">
                     {theme.name}
+                    {/* Delete Theme Button */}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation(); // Prevent any other click events on the theme row
+                        handleDeleteTheme(theme.id);
+                      }}
+                      className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition-opacity duration-200"
+                      title="Delete Theme"
+                    >
+                      &#x2715; {/* Unicode 'X' character */}
+                    </button>
                   </div>
                   {/* Initiative and Milestone Container */}
                   <div
