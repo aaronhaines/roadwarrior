@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 
 // Helper function to format dates
 const formatDate = (date) => {
@@ -12,6 +12,7 @@ const formatDate = (date) => {
 const INITIATIVE_HEIGHT = 40; // px
 const INITIATIVE_GAP = 8; // px (for mt-2 equivalent)
 const MILESTONE_OFFSET_TOP = 20; // px - how far above the initiative bar the milestone is
+const RESIZE_HANDLE_WIDTH = 10; // px - width of the draggable resize handle
 
 // Main App Component
 const App = () => {
@@ -43,6 +44,14 @@ const App = () => {
   const [editingInitiative, setEditingInitiative] = useState(null);
   const [showEditMilestoneModal, setShowEditMilestoneModal] = useState(false);
   const [editingMilestone, setEditingMilestone] = useState(null);
+
+  // State for drag and resize operations
+  const [dragState, setDragState] = useState(null); // { id, type: 'move'|'resizeLeft'|'resizeRight', initialMouseX, initialStartDate, initialEndDate }
+  // Ref to the outermost grid container to get consistent width for timeline calculations
+  const roadmapTimePeriodsRef = useRef(null); 
+
+  // Ref to hold the latest versions of mouse move/up handlers to avoid stale closures
+  const dragCallbacks = useRef({});
 
   // Define an array of background colors for themes
   const themeBackgroundColors = [
@@ -321,37 +330,177 @@ const App = () => {
     setEditingPeriodName('');
   };
 
-  // Calculate initiative block width and position
-  const getInitiativeStyle = (initiative) => {
-    const start = initiative.startDate;
-    const end = initiative.endDate;
+  // Calculate initiative block width and position (in percentages)
+  const getInitiativeStyle = useCallback((initiative) => {
+    if (timePeriods.length === 0) return { display: 'none' };
 
-    // Find the first and last time periods the initiative spans
-    const firstPeriodIndex = timePeriods.findIndex(period =>
-      start <= period.endDate && end >= period.startDate
-    );
-    const lastPeriodIndex = timePeriods.slice().reverse().findIndex(period =>
-      start <= period.endDate && end >= period.startDate
-    );
+    const roadmapMinDate = timePeriods[0].startDate;
+    const roadmapMaxDate = timePeriods[timePeriods.length - 1].endDate;
+    const totalRoadmapDurationMillis = roadmapMaxDate.getTime() - roadmapMinDate.getTime();
 
-    if (firstPeriodIndex === -1 || lastPeriodIndex === -1) {
-      return { display: 'none' }; // Initiative does not span any visible period
-    }
+    if (totalRoadmapDurationMillis <= 0) return { display: 'none' };
 
-    const actualFirstPeriodIndex = firstPeriodIndex;
-    const actualLastPeriodIndex = timePeriods.length - 1 - lastPeriodIndex;
+    const startOffsetMillis = initiative.startDate.getTime() - roadmapMinDate.getTime();
+    const endOffsetMillis = initiative.endDate.getTime() - roadmapMinDate.getTime();
 
-    const totalColumns = timePeriods.length;
-    const columnWidthPercent = 100 / totalColumns;
+    let left = (startOffsetMillis / totalRoadmapDurationMillis) * 100;
+    let width = ((endOffsetMillis - startOffsetMillis) / totalRoadmapDurationMillis) * 100;
 
-    const leftPosition = actualFirstPeriodIndex * columnWidthPercent;
-    const width = (actualLastPeriodIndex - actualFirstPeriodIndex + 1) * columnWidthPercent;
+    // Ensure left and width are within bounds (0-100%)
+    left = Math.max(0, left);
+    width = Math.min(100 - left, width); // Ensure width doesn't push it beyond 100%
 
     return {
-      left: `${leftPosition}%`,
+      left: `${left}%`,
       width: `${width}%`,
     };
-  };
+  }, [timePeriods]);
+
+  // This effect updates the functions stored in the ref whenever dependencies change.
+  // These functions will capture the latest state values.
+  useEffect(() => {
+    dragCallbacks.current.handleMouseMove = (e) => {
+      // console.log('handleMouseMove (from ref) firing');
+      if (!dragState || !roadmapTimePeriodsRef.current || timePeriods.length === 0) {
+        // console.log('Early exit in handleMouseMove (from ref). Conditions:', {
+        //   dragState: dragState,
+        //   roadmapTimePeriodsRefCurrent: roadmapTimePeriodsRef.current,
+        //   timePeriodsLength: timePeriods.length
+        // });
+        return;
+      }
+
+      const { id, type, initialMouseX, initialStartDate, initialEndDate } = dragState;
+
+      const currentMouseX = e.clientX;
+      const deltaX = currentMouseX - initialMouseX;
+      // console.log('e.clientX:', e.clientX, 'deltaX:', deltaX);
+
+      const totalRoadmapWidthPx = roadmapTimePeriodsRef.current.getBoundingClientRect().width;
+      const roadmapMinDate = timePeriods[0].startDate;
+      const roadmapMaxDate = timePeriods[timePeriods.length - 1].endDate;
+      const totalRoadmapDurationMillis = roadmapMaxDate.getTime() - roadmapMinDate.getTime();
+
+      // console.log('totalRoadmapWidthPx:', totalRoadmapWidthPx, 'totalRoadmapDurationMillis:', totalRoadmapDurationMillis);
+
+      if (totalRoadmapWidthPx === 0 || totalRoadmapDurationMillis <= 0) {
+        // console.log('Early exit (from ref): totalRoadmapWidthPx is 0 or totalRoadmapDurationMillis <= 0');
+        return;
+      }
+
+      const pixelsPerMillisecond = totalRoadmapWidthPx / totalRoadmapDurationMillis;
+      const deltaMillis = deltaX / pixelsPerMillisecond;
+      // console.log('pixelsPerMillisecond:', pixelsPerMillisecond, 'deltaMillis:', deltaMillis);
+
+      setInitiatives(prevInitiatives => prevInitiatives.map(init => {
+        if (init.id === id) {
+          let newStartDate = new Date(initialStartDate.getTime());
+          let newEndDate = new Date(initialEndDate.getTime());
+
+          if (type === 'move') {
+            newStartDate = new Date(initialStartDate.getTime() + deltaMillis);
+            newEndDate = new Date(initialEndDate.getTime() + deltaMillis);
+          } else if (type === 'resizeLeft') {
+            newStartDate = new Date(initialStartDate.getTime() + deltaMillis);
+            // Ensure newStartDate doesn't go past newEndDate
+            if (newStartDate.getTime() > newEndDate.getTime()) {
+              newStartDate = new Date(newEndDate.getTime());
+            }
+          } else if (type === 'resizeRight') {
+            newEndDate = new Date(initialEndDate.getTime() + deltaMillis);
+            // Ensure newEndDate doesn't go before newStartDate
+            if (newEndDate.getTime() < newStartDate.getTime()) {
+              newEndDate = new Date(newStartDate.getTime());
+            }
+          }
+
+          // Clamp dates to overall roadmap boundaries
+          const firstPeriodStartDate = timePeriods[0].startDate;
+          const lastPeriodEndDate = timePeriods[timePeriods.length - 1].endDate;
+
+          // Clamp newStartDate
+          if (newStartDate.getTime() < firstPeriodStartDate.getTime()) {
+            newStartDate = firstPeriodStartDate;
+            if (type === 'move') {
+              const duration = initialEndDate.getTime() - initialStartDate.getTime();
+              newEndDate = new Date(newStartDate.getTime() + duration);
+            }
+          }
+
+          // Clamp newEndDate
+          if (newEndDate.getTime() > lastPeriodEndDate.getTime()) {
+            newEndDate = lastPeriodEndDate;
+            if (type === 'move') {
+              const duration = initialEndDate.getTime() - initialStartDate.getTime();
+              newStartDate = new Date(newEndDate.getTime() - duration);
+            }
+          }
+
+          // Final check to ensure start is not after end
+          if (newStartDate.getTime() > newEndDate.getTime()) {
+              newEndDate = new Date(newStartDate.getTime());
+          }
+          // console.log('Updated initiative (from ref):', { ...init, startDate: newStartDate, endDate: newEndDate });
+          return {
+            ...init,
+            startDate: newStartDate,
+            endDate: newEndDate,
+          };
+        }
+        return init;
+      }));
+    };
+
+    dragCallbacks.current.handleMouseUp = () => {
+      // console.log('handleMouseUp (from ref) firing');
+      setDragState(null);
+      // Remove the stable global event listeners
+      document.removeEventListener('mousemove', handleGlobalMouseMove);
+      document.removeEventListener('mouseup', handleGlobalMouseUp);
+    };
+  }, [dragState, timePeriods, initiatives]); // Dependencies for the effect
+
+  // Stable global event handler for mouse move
+  const handleGlobalMouseMove = useCallback((e) => {
+    if (dragCallbacks.current.handleMouseMove) {
+      dragCallbacks.current.handleMouseMove(e);
+    }
+  }, []); // No dependencies, this function reference is stable
+
+  // Stable global event handler for mouse up
+  const handleGlobalMouseUp = useCallback(() => {
+    if (dragCallbacks.current.handleMouseUp) {
+      dragCallbacks.current.handleMouseUp();
+    }
+  }, []); // No dependencies, this function reference is stable
+
+  // Handle mouse down on an initiative for dragging or resizing
+  const handleMouseDown = useCallback((e, initiativeId, actionType = 'move') => {
+    // console.log('handleMouseDown triggered');
+    e.stopPropagation(); // Prevent opening initiative edit modal immediately
+
+    if (e.button !== 0) return; // Only allow left click
+
+    // Find the initiative from the current state to get its latest dates
+    const currentInitiative = initiatives.find(init => init.id === initiativeId);
+    if (!currentInitiative) {
+      console.log('handleMouseDown: Initiative not found for ID:', initiativeId);
+      return;
+    }
+
+    setDragState({
+      id: initiativeId,
+      type: actionType,
+      initialMouseX: e.clientX,
+      initialStartDate: currentInitiative.startDate,
+      initialEndDate: currentInitiative.endDate,
+    });
+    // console.log('handleMouseDown - dragState set:', { id: initiativeId, type: actionType, initialMouseX: e.clientX, initialStartDate: currentInitiative.startDate, initialEndDate: currentInitiative.endDate });
+
+    // Attach stable global listeners
+    document.addEventListener('mousemove', handleGlobalMouseMove);
+    document.addEventListener('mouseup', handleGlobalMouseUp);
+  }, [initiatives, handleGlobalMouseMove, handleGlobalMouseUp]); // Dependencies for handleMouseDown
 
   // Calculate dynamic min-width for the roadmap grid
   const themeColumnWidth = 200; // px
@@ -359,7 +508,7 @@ const App = () => {
   const calculatedMinWidth = themeColumnWidth + (timePeriods.length * timePeriodColumnWidth);
 
   return (
-    <div className="min-h-screen bg-gray-50 font-inter text-gray-800 p-4 sm:p-6">
+    <div className="min-h-screen bg-gray-50  font-inter text-gray-800 p-4 sm:p-6">
       <div className="max-w-7xl mx-auto bg-white shadow-lg rounded-xl p-6 sm:p-8">
         <h1 className="text-4xl font-extrabold text-center text-indigo-700 mb-8">
           Product Roadmap
@@ -394,7 +543,11 @@ const App = () => {
 
         {/* Roadmap Grid */}
         <div className="overflow-x-auto">
-          <div className="grid border border-gray-200 rounded-lg overflow-hidden" style={{ minWidth: `${calculatedMinWidth}px` }}>
+          <div
+            ref={roadmapTimePeriodsRef} // Ref is now on the main grid container
+            className="grid border border-gray-200 rounded-lg overflow-hidden"
+            style={{ minWidth: `${calculatedMinWidth}px` }}
+          >
             {/* Header Row: Time Periods */}
             <div className="grid" style={{ gridTemplateColumns: `200px repeat(${timePeriods.length}, 1fr)` }}>
               <div className="p-3 font-semibold text-gray-700 border-r border-gray-200">Themes</div>
@@ -454,18 +607,23 @@ const App = () => {
                   </div>
                   {/* Initiative and Milestone Container */}
                   <div
-                    className="relative col-span-full grid"
+                    className="relative col-span-full grid" // Re-added grid for background cells
                     style={{
-                      gridTemplateColumns: `repeat(${timePeriods.length}, 1fr)`,
+                      gridTemplateColumns: `repeat(${timePeriods.length}, 1fr)`, // Define columns for background cells
                       minHeight: `${minThemeRowHeight}px`, // Apply dynamic height here
                     }}
                   >
-                    {/* Background for columns */}
+                    {/* Background cells with borders for each time period */}
                     {timePeriods.map((period, index) => (
-                      <div key={period.id} className={`p-4 border-r border-gray-200 last:border-r-0`}>
-                        {/* No direct milestones here anymore, they are inside initiatives */}
+                      <div
+                        key={`bg-cell-${period.id}`}
+                        className={`p-4 border-r border-gray-200 last:border-r-0`} // Apply border-right to each cell
+                        style={{ zIndex: 1 }} // Ensure background cells are behind initiatives
+                      >
+                        {/* Content of background cell (empty) */}
                       </div>
                     ))}
+
                     {/* Initiatives for this theme, stacked vertically */}
                     {initiativesInThisTheme.map((initiative, initiativeIndex) => (
                       <div
@@ -475,18 +633,24 @@ const App = () => {
                           ...getInitiativeStyle(initiative), // This provides left and width
                           top: `${initiativeIndex * (INITIATIVE_HEIGHT + INITIATIVE_GAP) + INITIATIVE_GAP + MILESTONE_OFFSET_TOP}px`, // Vertical stacking with gap, shifted down for milestones
                           height: `${INITIATIVE_HEIGHT}px`, // Fixed height
+                          zIndex: 2, // Ensure initiatives are above background cells
                         }}
-                        onClick={() => {
-                          setEditingInitiative({
-                            ...initiative,
-                            startDate: initiative.startDate.toISOString().split('T')[0],
-                            endDate: initiative.endDate.toISOString().split('T')[0],
-                          });
-                          setShowEditInitiativeModal(true);
-                        }}
-                        title={`${initiative.name}: ${initiative.description} (${formatDate(initiative.startDate)} - ${formatDate(initiative.endDate)})`}
+                        onMouseDown={(e) => handleMouseDown(e, initiative.id, 'move')} // Pass initiative.id
                       >
+                        {/* Left Resize Handle */}
+                        <div
+                          className="absolute top-0 left-0 h-full"
+                          style={{ width: `${RESIZE_HANDLE_WIDTH}px`, cursor: 'ew-resize' }}
+                          onMouseDown={(e) => handleMouseDown(e, initiative.id, 'resizeLeft')} // Pass initiative.id
+                        ></div>
                         {initiative.name}
+                        {/* Right Resize Handle */}
+                        <div
+                          className="absolute top-0 right-0 h-full"
+                          style={{ width: `${RESIZE_HANDLE_WIDTH}px`, cursor: 'ew-resize' }}
+                          onMouseDown={(e) => handleMouseDown(e, initiative.id, 'resizeRight')} // Pass initiative.id
+                        ></div>
+
                         {/* Milestones within this initiative */}
                         {milestones
                           .filter(m => m.initiativeId === initiative.id)
@@ -533,7 +697,6 @@ const App = () => {
                               >
                                 <span className="inline-block bg-purple-400 rounded-full w-2 h-2 border border-white shadow-sm"></span>
                                 <span className="text-white">{milestone.description}</span> {/* Display description with white text */}
-                                {/* Removed the line connecting milestone to initiative */}
                               </div>
                             );
                           })}
