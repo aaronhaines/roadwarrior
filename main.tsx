@@ -1,4 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+// Import html2canvas and jsPDF directly if they are installed as npm packages
+// For a Canvas environment, we'll assume they are loaded via script tags in the HTML body.
+// If you were running this locally with npm, you'd typically do:
+// import html2canvas from 'html2canvas';
+// import { jsPDF } from 'jspdf';
 
 // Helper function to format dates
 const formatDate = (date) => {
@@ -13,6 +18,7 @@ const INITIATIVE_HEIGHT = 40; // px
 const INITIATIVE_GAP = 8; // px (for mt-2 equivalent)
 const MILESTONE_OFFSET_TOP = 20; // px - how far above the initiative bar the milestone is
 const RESIZE_HANDLE_WIDTH = 10; // px - width of the draggable resize handle
+const THEME_COLUMN_WIDTH = 200; // px - width of the fixed theme column
 
 // Main App Component
 const App = () => {
@@ -48,7 +54,7 @@ const App = () => {
   // State for drag and resize operations
   const [dragState, setDragState] = useState(null); // { id, type: 'move'|'resizeLeft'|'resizeRight', initialMouseX, initialStartDate, initialEndDate }
   // Ref to the outermost grid container to get consistent width for timeline calculations
-  const roadmapTimePeriodsRef = useRef(null); 
+  const roadmapGridRef = useRef(null); 
 
   // Ref to hold the latest versions of mouse move/up handlers to avoid stale closures
   const dragCallbacks = useRef({});
@@ -380,13 +386,7 @@ const App = () => {
   // These functions will capture the latest state values.
   useEffect(() => {
     dragCallbacks.current.handleMouseMove = (e) => {
-      // console.log('handleMouseMove (from ref) firing');
-      if (!dragState || !roadmapTimePeriodsRef.current || timePeriods.length === 0) {
-        // console.log('Early exit in handleMouseMove (from ref). Conditions:', {
-        //   dragState: dragState,
-        //   roadmapTimePeriodsRefCurrent: roadmapTimePeriodsRef.current,
-        //   timePeriodsLength: timePeriods.length
-        // });
+      if (!dragState || !roadmapGridRef.current || timePeriods.length === 0) {
         return;
       }
 
@@ -394,23 +394,22 @@ const App = () => {
 
       const currentMouseX = e.clientX;
       const deltaX = currentMouseX - initialMouseX;
-      // console.log('e.clientX:', e.clientX, 'deltaX:', deltaX);
 
-      const totalRoadmapWidthPx = roadmapTimePeriodsRef.current.getBoundingClientRect().width;
+      // Get the width of the entire grid container
+      const totalGridWidthPx = roadmapGridRef.current.getBoundingClientRect().width;
+      // Calculate the width of just the time period section (total grid width minus theme column width)
+      const timePeriodSectionWidthPx = totalGridWidthPx - THEME_COLUMN_WIDTH;
+
       const roadmapMinDate = timePeriods[0].startDate;
       const roadmapMaxDate = timePeriods[timePeriods.length - 1].endDate;
       const totalRoadmapDurationMillis = roadmapMaxDate.getTime() - roadmapMinDate.getTime();
 
-      // console.log('totalRoadmapWidthPx:', totalRoadmapWidthPx, 'totalRoadmapDurationMillis:', totalRoadmapDurationMillis);
-
-      if (totalRoadmapWidthPx === 0 || totalRoadmapDurationMillis <= 0) {
-        // console.log('Early exit (from ref): totalRoadmapWidthPx is 0 or totalRoadmapDurationMillis <= 0');
+      if (timePeriodSectionWidthPx === 0 || totalRoadmapDurationMillis <= 0) {
         return;
       }
 
-      const pixelsPerMillisecond = totalRoadmapWidthPx / totalRoadmapDurationMillis;
+      const pixelsPerMillisecond = timePeriodSectionWidthPx / totalRoadmapDurationMillis;
       const deltaMillis = deltaX / pixelsPerMillisecond;
-      // console.log('pixelsPerMillisecond:', pixelsPerMillisecond, 'deltaMillis:', deltaMillis);
 
       setInitiatives(prevInitiatives => prevInitiatives.map(init => {
         if (init.id === id) {
@@ -460,7 +459,6 @@ const App = () => {
           if (newStartDate.getTime() > newEndDate.getTime()) {
               newEndDate = new Date(newStartDate.getTime());
           }
-          // console.log('Updated initiative (from ref):', { ...init, startDate: newStartDate, endDate: newEndDate });
           return {
             ...init,
             startDate: newStartDate,
@@ -472,7 +470,6 @@ const App = () => {
     };
 
     dragCallbacks.current.handleMouseUp = () => {
-      // console.log('handleMouseUp (from ref) firing');
       setDragState(null);
       // Remove the stable global event listeners
       document.removeEventListener('mousemove', handleGlobalMouseMove);
@@ -496,7 +493,6 @@ const App = () => {
 
   // Handle mouse down on an initiative for dragging or resizing
   const handleMouseDown = useCallback((e, initiativeId, actionType = 'move') => {
-    // console.log('handleMouseDown triggered');
     e.stopPropagation(); // Prevent opening initiative edit modal immediately
 
     if (e.button !== 0) return; // Only allow left click
@@ -515,17 +511,79 @@ const App = () => {
       initialStartDate: currentInitiative.startDate,
       initialEndDate: currentInitiative.endDate,
     });
-    // console.log('handleMouseDown - dragState set:', { id: initiativeId, type: actionType, initialMouseX: e.clientX, initialStartDate: currentInitiative.startDate, initialEndDate: currentInitiative.endDate });
 
     // Attach stable global listeners
     document.addEventListener('mousemove', handleGlobalMouseMove);
     document.addEventListener('mouseup', handleGlobalMouseUp);
   }, [initiatives, handleGlobalMouseMove, handleGlobalMouseUp]); // Dependencies for handleMouseDown
 
+  // Function to export the roadmap as an image (PNG)
+  const handleExportToImage = async () => {
+    if (!roadmapGridRef.current) {
+      console.error("Roadmap element not found for image export.");
+      return;
+    }
+    // Ensure html2canvas is available globally
+    if (typeof html2canvas === 'undefined') {
+      console.error("html2canvas library not loaded. Please ensure the script tag is present.");
+      return;
+    }
+
+    try {
+      const canvas = await html2canvas(roadmapGridRef.current, {
+        scale: 2, // Increase scale for better resolution
+        useCORS: true, // Important for images loaded from other origins (if any)
+        logging: false, // Disable verbose logging from html2canvas
+      });
+      const image = canvas.toDataURL('image/png');
+      const link = document.createElement('a');
+      link.href = image;
+      link.download = 'product_roadmap.png';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (error) {
+      console.error("Error exporting to image:", error);
+    }
+  };
+
+  // Function to export the roadmap as a PDF
+  const handleExportToPDF = async () => {
+    if (!roadmapGridRef.current) {
+      console.error("Roadmap element not found for PDF export.");
+      return;
+    }
+    // Ensure html2canvas and jsPDF are available globally
+    if (typeof html2canvas === 'undefined' || typeof jsPDF === 'undefined') {
+      console.error("html2canvas or jsPDF library not loaded. Please ensure the script tags are present.");
+      return;
+    }
+
+    try {
+      const canvas = await html2canvas(roadmapGridRef.current, {
+        scale: 2, // Increase scale for better resolution
+        useCORS: true,
+        logging: false,
+      });
+
+      const imgData = canvas.toDataURL('image/png');
+      const pdf = new jsPDF({
+        orientation: 'landscape', // Use landscape for wider content
+        unit: 'px',
+        format: [canvas.width, canvas.height] // Set PDF size to canvas size
+      });
+
+      // Add image to PDF. x, y, width, height
+      pdf.addImage(imgData, 'PNG', 0, 0, canvas.width, canvas.height);
+      pdf.save('product_roadmap.pdf');
+    } catch (error) {
+      console.error("Error exporting to PDF:", error);
+    }
+  };
+
   // Calculate dynamic min-width for the roadmap grid
-  const themeColumnWidth = 200; // px
   const timePeriodColumnWidth = 150; // px
-  const calculatedMinWidth = themeColumnWidth + (timePeriods.length * timePeriodColumnWidth);
+  const calculatedMinWidth = THEME_COLUMN_WIDTH + (timePeriods.length * timePeriodColumnWidth);
 
   return (
     <div className="min-h-screen bg-gray-50  font-inter text-gray-800 p-4 sm:p-6">
@@ -559,70 +617,83 @@ const App = () => {
           >
             Add Time Period
           </button>
+          {/* Export Buttons with Icons and spacing */}
+          <div className="flex gap-4 ml-auto"> {/* Added ml-auto to push to the right */}
+            <button
+              onClick={handleExportToImage}
+              className="px-5 py-2 bg-blue-600 text-white rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-75 transition duration-200 ease-in-out text-sm font-medium flex items-center justify-center"
+              aria-label="Export to Image"
+            >
+              <i className="fas fa-camera mr-2"></i> Image
+            </button>
+            <button
+              onClick={handleExportToPDF}
+              className="px-5 py-2 bg-red-600 text-white rounded-lg shadow-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-opacity-75 transition duration-200 ease-in-out text-sm font-medium flex items-center justify-center"
+              aria-label="Export to PDF"
+            >
+              <i className="fas fa-file-pdf mr-2"></i> PDF
+            </button>
+          </div>
         </div>
 
         {/* Roadmap Grid */}
         <div className="overflow-x-auto">
           <div
-            ref={roadmapTimePeriodsRef} // Ref is now on the main grid container
+            ref={roadmapGridRef} // Ref is now on the main grid container
             className="grid border border-gray-200 rounded-lg overflow-hidden"
-            style={{ minWidth: `${calculatedMinWidth}px` }}
+            style={{ gridTemplateColumns: `${THEME_COLUMN_WIDTH}px repeat(${timePeriods.length}, 1fr)`, minWidth: `${calculatedMinWidth}px` }}
           >
-            {/* Header Row: Time Periods */}
-            <div className="grid" style={{ gridTemplateColumns: `200px repeat(${timePeriods.length}, 1fr)` }}>
-              <div className="p-3 font-semibold text-gray-700 border-r border-gray-200">Themes</div>
-              {timePeriods.map(period => (
-                <div key={period.id} className="p-3 text-center font-semibold text-gray-700 border-r border-gray-200 last:border-r-0 relative group">
-                  {editingPeriodId === period.id ? (
-                    <input
-                      type="text"
-                      value={editingPeriodName}
-                      onChange={(e) => setEditingPeriodName(e.target.value)}
-                      onBlur={() => handleRenameTimePeriod(period.id, editingPeriodName)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          handleRenameTimePeriod(period.id, editingPeriodName);
-                        }
-                      }}
-                      className="w-full bg-white border border-indigo-300 rounded-md px-2 py-1 text-center"
-                      autoFocus
-                    />
-                  ) : (
-                    <span onDoubleClick={() => {
-                      setEditingPeriodId(period.id);
-                      setEditingPeriodName(period.name);
-                    }}>
-                      {period.name}
-                    </span>
-                  )}
-                  <button
-                    onClick={() => handleRemoveTimePeriod(period.id)}
-                    className="absolute top-1 right-1 text-gray-400 hover:text-red-600 text-xs opacity-0 group-hover:opacity-100 transition-opacity duration-200"
-                    title="Remove Time Period"
-                  >
-                    &#x2715; {/* Unicode 'X' character */}
-                  </button>
-                </div>
-              ))}
-            </div>
+            {/* Header Row: Themes and Time Periods */}
+            <div className="p-3 font-semibold text-gray-700 border-r border-gray-200">Themes</div>
+            {timePeriods.map(period => (
+              <div key={period.id} className="p-3 text-center font-semibold text-gray-700 border-r border-gray-200 last:border-r-0 relative group">
+                {editingPeriodId === period.id ? (
+                  <input
+                    type="text"
+                    value={editingPeriodName}
+                    onChange={(e) => setEditingPeriodName(e.target.value)}
+                    onBlur={() => handleRenameTimePeriod(period.id, editingPeriodName)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        handleRenameTimePeriod(period.id, editingPeriodName);
+                      }
+                    }}
+                    className="w-full bg-white border border-indigo-300 rounded-md px-2 py-1 text-center"
+                    autoFocus
+                  />
+                ) : (
+                  <span onDoubleClick={() => {
+                    setEditingPeriodId(period.id);
+                    setEditingPeriodName(period.name);
+                  }}>
+                    {period.name}
+                  </span>
+                )}
+                <button
+                  onClick={() => handleRemoveTimePeriod(period.id)}
+                  className="absolute top-1 right-1 text-gray-400 hover:text-red-600 text-xs opacity-0 group-hover:opacity-100 transition-opacity duration-200"
+                  title="Remove Time Period"
+                >
+                  &#x2715; {/* Unicode 'X' character */}
+                </button>
+              </div>
+            ))}
 
             {/* Theme Rows */}
             {themes.map((theme, themeIndex) => {
               // Filter initiatives for the current theme
               const initiativesInThisTheme = initiatives.filter(initiative => initiative.themeId === theme.id);
               // Calculate the minimum height needed for this theme row based on its initiatives
-              const minThemeRowHeight = Math.max(60, initiativesInThisTheme.length * (INITIATIVE_HEIGHT + INITIATIVE_GAP) + INITIATIVE_GAP + MILESTONE_OFFSET_TOP); // Add milestone offset to height
+              const minThemeRowHeight = Math.max(60, initiativesInThisTheme.length * (INITIATIVE_HEIGHT + INITIATIVE_GAP) + INITIATIVE_GAP + MILESTONE_OFFSET_TOP);
 
               // Determine the initiative background color based on the theme index
               const currentInitiativeColorClass = initiativeColors[themeIndex % initiativeColors.length];
 
               return (
-                <div
-                  key={theme.id}
-                  className={`grid border-b border-gray-200 last:border-b-0 ${themeBackgroundColors[themeIndex % themeBackgroundColors.length]}`}
-                  style={{ gridTemplateColumns: `200px repeat(${timePeriods.length}, 1fr)` }}
-                >
-                  <div className="p-4 font-medium text-gray-900 border-r border-gray-200 flex items-center relative group">
+                <React.Fragment key={theme.id}>
+                  {/* Theme Name Column */}
+                  <div className={`p-4 font-medium text-gray-900 border-r border-gray-200 flex items-center relative group ${themeBackgroundColors[themeIndex % themeBackgroundColors.length]}`}
+                       style={{ minHeight: `${minThemeRowHeight}px` }}>
                     {theme.name}
                     {/* Delete Theme Button */}
                     <button
@@ -636,20 +707,24 @@ const App = () => {
                       &#x2715; {/* Unicode 'X' character */}
                     </button>
                   </div>
-                  {/* Initiative and Milestone Container */}
+
+                  {/* Time Period Background Cells and Initiatives/Milestones for this row */}
+                  {/* This div spans all the time period columns */}
                   <div
-                    className="relative col-span-full grid" // Re-added grid for background cells
-                    style={{
-                      gridTemplateColumns: `repeat(${timePeriods.length}, 1fr)`, // Define columns for background cells
-                      minHeight: `${minThemeRowHeight}px`, // Apply dynamic height here
-                    }}
+                    className={`relative col-span-${timePeriods.length} ${themeBackgroundColors[themeIndex % themeBackgroundColors.length]}`}
+                    style={{ minHeight: `${minThemeRowHeight}px` }}
                   >
                     {/* Background cells with borders for each time period */}
                     {timePeriods.map((period, index) => (
                       <div
-                        key={`bg-cell-${period.id}`}
-                        className={`p-4 border-r border-gray-200 last:border-r-0`} // Apply border-right to each cell
-                        style={{ zIndex: 1 }} // Ensure background cells are behind initiatives
+                        key={`bg-cell-${theme.id}-${period.id}`}
+                        className={`absolute inset-y-0`}
+                        style={{
+                          left: `${(index / timePeriods.length) * 100}%`,
+                          width: `${(1 / timePeriods.length) * 100}%`,
+                          borderRight: index < timePeriods.length - 1 ? '1px solid rgb(229 231 235)' : 'none', // Tailwind gray-200 color
+                          zIndex: 1, // Ensure background cells are behind initiatives
+                        }}
                       >
                         {/* Content of background cell (empty) */}
                       </div>
@@ -661,7 +736,7 @@ const App = () => {
                         key={initiative.id}
                         className={`absolute text-white rounded-md p-2 text-xs font-medium shadow-md cursor-pointer hover:opacity-90 transition duration-150 ease-in-out whitespace-nowrap text-ellipsis ${currentInitiativeColorClass} group`} /* Added group for hover effect */
                         style={{
-                          ...getInitiativeStyle(initiative), // This provides left and width
+                          ...getInitiativeStyle(initiative), // This provides left and width as percentages of the time period section
                           top: `${initiativeIndex * (INITIATIVE_HEIGHT + INITIATIVE_GAP) + INITIATIVE_GAP + MILESTONE_OFFSET_TOP}px`, // Vertical stacking with gap, shifted down for milestones
                           height: `${INITIATIVE_HEIGHT}px`, // Fixed height
                           zIndex: 2, // Ensure initiatives are above background cells
@@ -756,7 +831,7 @@ const App = () => {
                       </div>
                     ))}
                   </div>
-                </div>
+                </React.Fragment>
               );
             })}
           </div>
