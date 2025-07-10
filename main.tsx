@@ -628,7 +628,7 @@ const App = () => {
                     {initiativesInThisTheme.map((initiative, initiativeIndex) => (
                       <div
                         key={initiative.id}
-                        className={`absolute text-white rounded-md p-2 text-xs font-medium shadow-md cursor-pointer hover:opacity-90 transition duration-150 ease-in-out whitespace-nowrap text-ellipsis ${currentInitiativeColorClass}`}
+                        className={`absolute text-white rounded-md p-2 text-xs font-medium shadow-md cursor-pointer hover:opacity-90 transition duration-150 ease-in-out whitespace-nowrap text-ellipsis ${currentInitiativeColorClass} group`} /* Added group for hover effect */
                         style={{
                           ...getInitiativeStyle(initiative), // This provides left and width
                           top: `${initiativeIndex * (INITIATIVE_HEIGHT + INITIATIVE_GAP) + INITIATIVE_GAP + MILESTONE_OFFSET_TOP}px`, // Vertical stacking with gap, shifted down for milestones
@@ -650,6 +650,17 @@ const App = () => {
                           style={{ width: `${RESIZE_HANDLE_WIDTH}px`, cursor: 'ew-resize' }}
                           onMouseDown={(e) => handleMouseDown(e, initiative.id, 'resizeRight')} // Pass initiative.id
                         ></div>
+                        {/* Delete Initiative Button */}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation(); // Prevent drag/edit on click
+                            handleDeleteInitiative(initiative.id);
+                          }}
+                          className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition-opacity duration-200"
+                          title="Delete Initiative"
+                        >
+                          &#x2715; {/* Unicode 'X' character */}
+                        </button>
 
                         {/* Milestones within this initiative */}
                         {milestones
@@ -674,7 +685,7 @@ const App = () => {
                             return (
                               <div
                                 key={milestone.id}
-                                className="absolute z-20 cursor-pointer flex items-center space-x-1 px-1 rounded"
+                                className="absolute z-20 cursor-pointer flex items-center space-x-1 px-1 rounded group" /* Added group for hover effect */
                                 style={{
                                   left: `${leftPosition}%`,
                                   top: `-${MILESTONE_OFFSET_TOP}px`, // Position at the top of the initiative block
@@ -697,6 +708,17 @@ const App = () => {
                               >
                                 <span className="inline-block bg-purple-400 rounded-full w-2 h-2 border border-white shadow-sm"></span>
                                 <span className="text-white">{milestone.description}</span> {/* Display description with white text */}
+                                {/* Delete Milestone Button */}
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation(); // Prevent opening milestone edit modal
+                                    handleDeleteMilestone(milestone.id);
+                                  }}
+                                  className="ml-1 bg-red-500 text-white rounded-full w-4 h-4 flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition-opacity duration-200"
+                                  title="Delete Milestone"
+                                >
+                                  &#x2715; {/* Unicode 'X' character */}
+                                </button>
                               </div>
                             );
                           })}
