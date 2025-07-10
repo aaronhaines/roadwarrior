@@ -20,6 +20,19 @@ const MILESTONE_OFFSET_TOP = 20; // px - how far above the initiative bar the mi
 const RESIZE_HANDLE_WIDTH = 10; // px - width of the draggable resize handle
 const THEME_COLUMN_WIDTH = 200; // px - width of the fixed theme column
 
+// Helper to get today's date in YYYY-MM-DD format
+const getTodayDateString = () => {
+  const today = new Date();
+  return today.toISOString().split('T')[0];
+};
+
+// Helper to get date one month from today in YYYY-MM-DD format
+const getOneMonthLaterDateString = () => {
+  const today = new Date();
+  const oneMonthLater = new Date(today.getFullYear(), today.getMonth() + 1, today.getDate());
+  return oneMonthLater.toISOString().split('T')[0];
+};
+
 // Main App Component
 const App = () => {
   const [themes, setThemes] = useState([]);
@@ -28,14 +41,16 @@ const App = () => {
   const [timePeriods, setTimePeriods] = useState([]);
   const [editingPeriodId, setEditingPeriodId] = useState(null);
   const [editingPeriodName, setEditingPeriodName] = useState('');
+  const [editingThemeId, setEditingThemeId] = useState(null); // New state for editing theme
+  const [editingThemeName, setEditingThemeName] = useState(''); // New state for editing theme name
 
   const [newThemeName, setNewThemeName] = useState('');
   const [newInitiative, setNewInitiative] = useState({
     themeId: '',
     name: '',
     description: '',
-    startDate: '',
-    endDate: '',
+    startDate: getTodayDateString(), // Default to today
+    endDate: getOneMonthLaterDateString(), // Default to one month later
   });
   const [newMilestone, setNewMilestone] = useState({
     initiativeId: '', // New field to link to an initiative
@@ -55,6 +70,8 @@ const App = () => {
   const [dragState, setDragState] = useState(null); // { id, type: 'move'|'resizeLeft'|'resizeRight', initialMouseX, initialStartDate, initialEndDate }
   // Ref to the outermost grid container to get consistent width for timeline calculations
   const roadmapGridRef = useRef(null); 
+  // Ref to track if a drag occurred during the current mousedown-mouseup cycle
+  const dragOccurred = useRef(false);
 
   // Ref to hold the latest versions of mouse move/up handlers to avoid stale closures
   const dragCallbacks = useRef({});
@@ -192,13 +209,15 @@ const App = () => {
     setShowAddThemeModal(false);
   };
 
-  // Update Theme (if needed, though not explicitly requested, good to have a placeholder)
+  // Update Theme
   const handleUpdateTheme = (id, newName) => {
     setThemes(prevThemes =>
       prevThemes.map(theme =>
         theme.id === id ? { ...theme, name: newName } : theme
       )
     );
+    setEditingThemeId(null); // Exit editing mode for theme
+    setEditingThemeName('');
   };
 
   // Delete Theme
@@ -231,8 +250,8 @@ const App = () => {
       themeId: themes.length > 0 ? themes[0].id : '',
       name: '',
       description: '',
-      startDate: '',
-      endDate: '',
+      startDate: getTodayDateString(), // Reset to today's date
+      endDate: getOneMonthLaterDateString(), // Reset to one month later
     });
     setShowAddInitiativeModal(false);
   };
@@ -395,6 +414,11 @@ const App = () => {
       const currentMouseX = e.clientX;
       const deltaX = currentMouseX - initialMouseX;
 
+      // If mouse has moved beyond a small threshold, consider it a drag
+      if (Math.abs(deltaX) > 5) { // 5 pixels threshold
+        dragOccurred.current = true;
+      }
+
       // Get the width of the entire grid container
       const totalGridWidthPx = roadmapGridRef.current.getBoundingClientRect().width;
       // Calculate the width of just the time period section (total grid width minus theme column width)
@@ -497,7 +521,8 @@ const App = () => {
 
     if (e.button !== 0) return; // Only allow left click
 
-    // Find the initiative from the current state to get its latest dates
+    dragOccurred.current = false; // Reset drag flag at the start of a new interaction
+
     const currentInitiative = initiatives.find(init => init.id === initiativeId);
     if (!currentInitiative) {
       console.log('handleMouseDown: Initiative not found for ID:', initiativeId);
@@ -512,7 +537,6 @@ const App = () => {
       initialEndDate: currentInitiative.endDate,
     });
 
-    // Attach stable global listeners
     document.addEventListener('mousemove', handleGlobalMouseMove);
     document.addEventListener('mouseup', handleGlobalMouseUp);
   }, [initiatives, handleGlobalMouseMove, handleGlobalMouseUp]); // Dependencies for handleMouseDown
@@ -600,7 +624,15 @@ const App = () => {
             Add Theme
           </button>
           <button
-            onClick={() => setShowAddInitiativeModal(true)}
+            onClick={() => {
+              // Reset new initiative form with default dates when opening modal
+              setNewInitiative(prev => ({
+                ...prev,
+                startDate: getTodayDateString(),
+                endDate: getOneMonthLaterDateString(),
+              }));
+              setShowAddInitiativeModal(true);
+            }}
             className="px-5 py-2 bg-green-600 text-white rounded-lg shadow-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-opacity-75 transition duration-200 ease-in-out text-sm font-medium"
           >
             Add Initiative
@@ -694,7 +726,28 @@ const App = () => {
                   {/* Theme Name Column */}
                   <div className={`p-4 font-medium text-gray-900 border-r border-gray-200 flex items-center relative group ${themeBackgroundColors[themeIndex % themeBackgroundColors.length]}`}
                        style={{ minHeight: `${minThemeRowHeight}px` }}>
-                    {theme.name}
+                    {editingThemeId === theme.id ? (
+                      <input
+                        type="text"
+                        value={editingThemeName}
+                        onChange={(e) => setEditingThemeName(e.target.value)}
+                        onBlur={() => handleUpdateTheme(theme.id, editingThemeName)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            handleUpdateTheme(theme.id, editingThemeName);
+                          }
+                        }}
+                        className="w-full bg-white border border-indigo-300 rounded-md px-2 py-1 text-gray-900"
+                        autoFocus
+                      />
+                    ) : (
+                      <span onDoubleClick={() => {
+                        setEditingThemeId(theme.id);
+                        setEditingThemeName(theme.name);
+                      }}>
+                        {theme.name}
+                      </span>
+                    )}
                     {/* Delete Theme Button */}
                     <button
                       onClick={(e) => {
@@ -742,6 +795,20 @@ const App = () => {
                           zIndex: 2, // Ensure initiatives are above background cells
                         }}
                         onMouseDown={(e) => handleMouseDown(e, initiative.id, 'move')} // Pass initiative.id
+                        onClick={(e) => {
+                          // Only open edit modal if a drag did NOT occur during this mousedown-mouseup cycle
+                          if (dragOccurred.current) {
+                            dragOccurred.current = false; // Reset the flag for the next interaction
+                            return; // Prevent opening the modal if a drag happened
+                          }
+                          e.stopPropagation(); // Prevent event bubbling
+                          setEditingInitiative({
+                            ...initiative,
+                            startDate: initiative.startDate.toISOString().split('T')[0],
+                            endDate: initiative.endDate.toISOString().split('T')[0],
+                          });
+                          setShowEditInitiativeModal(true);
+                        }}
                       >
                         {/* Left Resize Handle */}
                         <div
